@@ -1,0 +1,18 @@
+mutation UpdateTemplate {
+  saveTemplate(input: {
+    templateId: "84mwkk26fy"
+    imageName: "zhaodloke/omniavatar-runpod:v15"
+    dockerArgs: ""
+    env: [
+      {key: "HUGGING_FACE_HUB_TOKEN", value: ""}
+    ]
+    volumeInPath: "/workspace"
+    volumeMountPath: "/workspace"
+    ports: "8000/http"
+    startSsh: false
+  }) {
+    id
+    name
+    imageName
+  }
+}

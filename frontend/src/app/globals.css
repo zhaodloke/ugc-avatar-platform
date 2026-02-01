@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-gray-900 antialiased;
+  }
+}
+
+/* Custom scrollbar for avatar grid */
+.avatar-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.avatar-grid::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.avatar-grid::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.avatar-grid::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

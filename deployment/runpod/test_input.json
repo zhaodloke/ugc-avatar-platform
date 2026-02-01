@@ -1,0 +1,12 @@
+{
+  "input": {
+    "reference_image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "audio": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=",
+    "prompt": "A person speaking naturally",
+    "emotion": "neutral",
+    "settings": {
+      "guidance_scale": 4.5,
+      "num_inference_steps": 50
+    }
+  }
+}

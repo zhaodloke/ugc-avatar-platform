@@ -1,0 +1,66 @@
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+
+# Environment (contains API keys!)
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Media
+*.mp4
+*.avi
+*.mov
+test-files/*.jpg
+test-files/*.png
+test-files/*.mp3
+test-files/*.wav
+
+# Temporary
+/tmp/*
+*.tmp
+
+# Models (too large for git)
+models/
+
+# OmniAvatar repo (cloned separately)
+OmniAvatar/
+
+# Node
+node_modules/
+build/
+dist/
+.next/
+out/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Local storage
+backend/local_storage/
+uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+runpod-handler/

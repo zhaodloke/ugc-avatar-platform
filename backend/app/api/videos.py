@@ -1,0 +1,378 @@
+﻿from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from sqlalchemy.orm import Session
+from typing import Optional
+import base64
+import uuid
+import sys
+import os
+import mimetypes
+from datetime import datetime
+from pathlib import Path
+
+# Add project root to path for worker import
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from ..db.database import get_db
+from ..db.models import Video, VideoStatus, VideoTier
+from schemas.video import VideoGenerationRequest, VideoResponse, VideoStatusResponse
+from services.storage import storage_service
+from services.tts import get_tts_service
+from services.gpu_worker import get_gpu_worker
+from services.replicate_worker import get_replicate_worker
+
+# Import worker task (may fail if celery not configured)
+try:
+    from worker.tasks import generate_video_task
+    CELERY_AVAILABLE = True
+except ImportError:
+    CELERY_AVAILABLE = False
+    generate_video_task = None
+
+# Check which GPU worker is configured (priority: Replicate > RunPod > Celery > Mock)
+replicate_worker = get_replicate_worker()
+REPLICATE_AVAILABLE = replicate_worker.is_configured
+
+gpu_worker = get_gpu_worker()
+RUNPOD_AVAILABLE = gpu_worker.is_configured
+
+router = APIRouter(prefix="/videos", tags=["videos"])
+
+def _get_audio_extension(content_type: str, filename: Optional[str] = None) -> str:
+    """Get appropriate file extension for audio content type"""
+    # Try to get extension from content type
+    ext_map = {
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/ogg": ".ogg",
+        "audio/m4a": ".m4a",
+        "audio/mp4": ".m4a",
+        "audio/aac": ".aac",
+        "audio/webm": ".webm",
+    }
+    ext = ext_map.get(content_type, None)
+
+    # Fallback: try to extract from filename
+    if not ext and filename:
+        ext = Path(filename).suffix.lower()
+        if ext not in [".mp3", ".wav", ".ogg", ".m4a", ".aac", ".webm"]:
+            ext = ".mp3"  # Default
+
+    return ext or ".mp3"
+
+
+@router.post("/generate", response_model=VideoResponse)
+async def generate_video(
+    background_tasks: BackgroundTasks,
+    reference_image: UploadFile = File(...),
+    text_input: Optional[str] = Form(None),
+    audio_file: Optional[UploadFile] = File(None),
+    prompt: str = Form(...),
+    emotion: str = Form("neutral"),
+    style: str = Form("testimonial"),
+    tier: VideoTier = Form(VideoTier.STANDARD),
+    user_id: str = Form("user-123"),  # Replace with actual auth
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a new avatar video
+
+    Parameters:
+    - reference_image: Image file of person/avatar (JPEG, PNG, WebP)
+    - text_input: Text to convert to speech (optional if audio_file provided)
+    - audio_file: Audio file (optional if text_input provided)
+    - prompt: Scene description (e.g., "Happy customer in modern kitchen")
+    - emotion: Emotion (happy, sad, excited, calm, neutral)
+    - style: Video style (podcast, interview, testimonial, demo)
+    - tier: Generation tier (free, standard, premium)
+    """
+
+    # Validate inputs
+    if not text_input and not audio_file:
+        raise HTTPException(status_code=400, detail="Either text_input or audio_file must be provided")
+
+    # Upload reference image - preserve original extension
+    image_data = await reference_image.read()
+    image_ext = Path(reference_image.filename).suffix.lower() if reference_image.filename else ".jpg"
+    if image_ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        image_ext = ".jpg"
+    image_key = f"uploads/{user_id}/images/{uuid.uuid4()}{image_ext}"
+    reference_image_url = storage_service.upload_file(image_data, image_key, reference_image.content_type)
+
+    # Handle audio - preserve original format
+    audio_url = None
+    if audio_file:
+        # Upload provided audio with correct extension
+        audio_data = await audio_file.read()
+        audio_ext = _get_audio_extension(audio_file.content_type, audio_file.filename)
+        audio_key = f"uploads/{user_id}/audio/{uuid.uuid4()}{audio_ext}"
+        audio_url = storage_service.upload_file(audio_data, audio_key, audio_file.content_type)
+    elif text_input:
+        # Generate audio from text (TTS always returns mp3)
+        tts_service = get_tts_service()
+        audio_data = tts_service.generate_audio(text_input, provider="openai")
+        audio_key = f"uploads/{user_id}/audio/{uuid.uuid4()}.mp3"
+        audio_url = storage_service.upload_file(audio_data, audio_key, "audio/mpeg")
+
+    # Create video record
+    video = Video(
+        user_id=user_id,
+        reference_image_url=reference_image_url,
+        audio_url=audio_url,
+        text_input=text_input,
+        prompt=prompt,
+        emotion=emotion,
+        style=style,
+        status=VideoStatus.PENDING,
+        tier=tier,
+        settings={
+            "sample_steps": 40 if tier == VideoTier.STANDARD else 60,
+            "guidance_scale": 7.5
+        }
+    )
+
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+
+    # Set initial status to processing
+    video.status = VideoStatus.PROCESSING
+    video.processing_started_at = datetime.utcnow()
+    db.commit()
+
+    # Queue video generation task using FastAPI BackgroundTasks
+    # Priority: 1) Replicate, 2) RunPod GPU, 3) Celery worker, 4) Mock mode
+    if REPLICATE_AVAILABLE:
+        print("[VIDEO] Using Replicate for video generation")
+        background_tasks.add_task(_run_replicate_generation, video.id, image_data, audio_data)
+    elif RUNPOD_AVAILABLE:
+        print("[VIDEO] Using RunPod GPU worker for generation")
+        background_tasks.add_task(_run_runpod_generation, video.id, image_data, audio_data)
+    elif CELERY_AVAILABLE and generate_video_task:
+        try:
+            task = generate_video_task.delay(video.id)
+            video.celery_task_id = task.id
+            db.commit()
+        except Exception as e:
+            print(f"[VIDEO] Celery unavailable ({e}), using mock mode")
+            background_tasks.add_task(_run_mock_generation, video.id)
+    else:
+        print("[VIDEO] No GPU worker, using mock mode for development")
+        background_tasks.add_task(_run_mock_generation, video.id)
+
+    return video
+
+
+def _run_replicate_generation(video_id: int, image_data: bytes, audio_data: bytes):
+    """Background task: Generate video using Replicate API"""
+    from ..db.database import SessionLocal
+    local_db = SessionLocal()
+
+    try:
+        v = local_db.query(Video).filter(Video.id == video_id).first()
+        if not v:
+            return
+
+        print(f"[VIDEO] Starting Replicate generation for video {video_id}")
+
+        # Call Replicate
+        result = replicate_worker.generate_video(
+            reference_image=image_data,
+            audio_data=audio_data,
+        )
+
+        # Save the generated video
+        video_bytes = result["video"]
+        video_key = f"outputs/{v.user_id}/videos/{uuid.uuid4()}.mp4"
+        video_url = storage_service.upload_file(video_bytes, video_key, "video/mp4")
+
+        # Update video record
+        v.status = VideoStatus.COMPLETED
+        v.output_video_url = video_url
+        v.processing_time_seconds = (datetime.utcnow() - v.processing_started_at).total_seconds() if v.processing_started_at else 0
+        local_db.commit()
+
+        print(f"[VIDEO] Replicate generation completed for video {video_id}")
+
+    except Exception as e:
+        print(f"[VIDEO] Replicate generation failed: {e}")
+        try:
+            v = local_db.query(Video).filter(Video.id == video_id).first()
+            if v:
+                v.status = VideoStatus.FAILED
+                v.error_message = str(e)
+                local_db.commit()
+        except:
+            pass
+
+    finally:
+        local_db.close()
+
+
+def _run_runpod_generation(video_id: int, image_data: bytes, audio_data: bytes):
+    """Background task: Generate video using RunPod GPU worker"""
+    from ..db.database import SessionLocal
+    local_db = SessionLocal()
+
+    try:
+        v = local_db.query(Video).filter(Video.id == video_id).first()
+        if not v:
+            return
+
+        print(f"[VIDEO] Starting RunPod generation for video {video_id}")
+
+        # Call RunPod
+        result = gpu_worker.generate_video(
+            reference_image=image_data,
+            audio_data=audio_data,
+            prompt=v.prompt,
+            emotion=v.emotion or "neutral",
+            guidance_scale=v.settings.get("guidance_scale", 7.5) if v.settings else 7.5,
+            num_inference_steps=v.settings.get("sample_steps", 40) if v.settings else 40,
+        )
+
+        # Save the generated video
+        video_bytes = result["video"]
+        video_key = f"outputs/{v.user_id}/videos/{uuid.uuid4()}.mp4"
+        video_url = storage_service.upload_file(video_bytes, video_key, "video/mp4")
+
+        # Update video record
+        v.status = VideoStatus.COMPLETED
+        v.output_video_url = video_url
+        v.duration = result.get("duration", 0)
+        v.processing_time_seconds = (datetime.utcnow() - v.processing_started_at).total_seconds() if v.processing_started_at else 0
+        local_db.commit()
+
+        print(f"[VIDEO] RunPod generation completed for video {video_id}")
+
+    except Exception as e:
+        print(f"[VIDEO] RunPod generation failed: {e}")
+        try:
+            v = local_db.query(Video).filter(Video.id == video_id).first()
+            if v:
+                v.status = VideoStatus.FAILED
+                v.error_message = str(e)
+                local_db.commit()
+        except:
+            pass
+
+    finally:
+        local_db.close()
+
+
+def _run_mock_generation(video_id: int):
+    """Background task: Simulate video generation for development/demo"""
+    import time
+    from ..db.database import SessionLocal
+    local_db = SessionLocal()
+
+    try:
+        # Simulate processing time
+        time.sleep(3)
+
+        v = local_db.query(Video).filter(Video.id == video_id).first()
+        if not v:
+            return
+
+        v.status = VideoStatus.COMPLETED
+        v.duration = 10.0
+        v.processing_time_seconds = 3.0
+
+        # Try to upload bundled sample video to storage for consistent URLs
+        sample_paths = [
+            Path(__file__).parent.parent.parent.parent / "frontend" / "public" / "demo" / "sample-avatar-video.mp4",
+            Path("/app/frontend/public/demo/sample-avatar-video.mp4"),
+        ]
+
+        sample_uploaded = False
+        for sample_path in sample_paths:
+            if sample_path.exists():
+                try:
+                    with open(sample_path, 'rb') as f:
+                        video_bytes = f.read()
+                    video_key = f"outputs/{v.user_id}/videos/mock-{v.id}.mp4"
+                    video_url = storage_service.upload_file(video_bytes, video_key, "video/mp4")
+                    v.output_video_url = video_url
+                    sample_uploaded = True
+                    print(f"[VIDEO] Mock video uploaded to storage: {video_url}")
+                    break
+                except Exception as upload_err:
+                    print(f"[VIDEO] Failed to upload sample: {upload_err}")
+
+        # Fallback to frontend-served path if storage upload failed
+        if not sample_uploaded:
+            v.output_video_url = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/demo/sample-avatar-video.mp4"
+            print("[VIDEO] Using frontend-served demo video path")
+
+        v.thumbnail_url = f"{settings.PUBLIC_BASE_URL.rstrip('/')}/demo/sample-thumbnail.jpg"
+        local_db.commit()
+        print(f"[VIDEO] Mock generation completed for video {v.id}")
+
+    except Exception as e:
+        print(f"[VIDEO] Error in mock completion: {e}")
+
+    finally:
+        local_db.close()
+
+@router.get("/{video_id}", response_model=VideoResponse)
+async def get_video(video_id: int, db: Session = Depends(get_db)):
+    """Get video by ID"""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return video
+
+@router.get("/{video_id}/status", response_model=VideoStatusResponse)
+async def get_video_status(video_id: int, db: Session = Depends(get_db)):
+    """Get video generation status"""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Calculate progress
+    progress = 0
+    message = None
+
+    if video.status == VideoStatus.PENDING:
+        progress = 10
+        message = "Waiting in queue..."
+    elif video.status == VideoStatus.PROCESSING:
+        # Estimate based on time elapsed
+        if video.processing_started_at:
+            elapsed = (datetime.utcnow() - video.processing_started_at).total_seconds()
+            # Assume 60 seconds total processing time
+            progress = min(90, 20 + int(elapsed / 60 * 70))
+            message = "Generating video..."
+    elif video.status == VideoStatus.COMPLETED:
+        progress = 100
+        message = "Video ready!"
+    elif video.status == VideoStatus.FAILED:
+        progress = 0
+        message = "Generation failed"
+
+    return VideoStatusResponse(
+        id=video.id,
+        status=video.status,
+        progress=progress,
+        message=message,
+        output_video_url=video.output_video_url,
+        error_message=video.error_message
+    )
+
+@router.delete("/{video_id}")
+async def delete_video(video_id: int, db: Session = Depends(get_db)):
+    """Delete video and associated files"""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Delete files from storage
+    # TODO: Extract keys from URLs and delete
+
+    db.delete(video)
+    db.commit()
+
+    return {"message": "Video deleted successfully"}
