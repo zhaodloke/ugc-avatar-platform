@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     ALLOWED_IMAGE_TYPES: list = ["image/jpeg", "image/png", "image/webp"]
     ALLOWED_AUDIO_TYPES: list = ["audio/mpeg", "audio/wav", "audio/ogg"]
 
-    # OmniAvatar
-    OMNIAVATAR_MODEL_PATH: str = "/models/OmniAvatar-14B"
-    OMNIAVATAR_BASE_MODEL_PATH: str = "/models/Wan2.1-T2V-14B"
-    WAV2VEC_MODEL_PATH: str = "/models/wav2vec2-base-960h"
+    # HunyuanVideo-1.5
+    HUNYUAN_MODEL_PATH: str = "/runpod-volume/models/hunyuan-video-1.5"
+    HUNYUAN_RESOLUTION: str = "720p"
+    HUNYUAN_USE_CFG_DISTILLED: bool = True
 
     # TTS
     ELEVENLABS_API_KEY: Optional[str] = None

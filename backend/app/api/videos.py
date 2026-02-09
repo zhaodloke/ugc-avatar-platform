@@ -16,6 +16,7 @@ if project_root not in sys.path:
 
 from ..db.database import get_db
 from ..db.models import Video, VideoStatus, VideoTier
+from ..core.config import settings
 from schemas.video import VideoGenerationRequest, VideoResponse, VideoStatusResponse
 from services.storage import storage_service
 from services.tts import get_tts_service
@@ -129,8 +130,10 @@ async def generate_video(
         status=VideoStatus.PENDING,
         tier=tier,
         settings={
-            "sample_steps": 40 if tier == VideoTier.STANDARD else 60,
-            "guidance_scale": 7.5
+            "num_inference_steps": 50,
+            "num_frames": 129,
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
         }
     )
 
@@ -150,7 +153,7 @@ async def generate_video(
         background_tasks.add_task(_run_replicate_generation, video.id, image_data, audio_data)
     elif RUNPOD_AVAILABLE:
         print("[VIDEO] Using RunPod GPU worker for generation")
-        background_tasks.add_task(_run_runpod_generation, video.id, image_data, audio_data)
+        background_tasks.add_task(_run_runpod_generation, video.id, image_data)
     elif CELERY_AVAILABLE and generate_video_task:
         try:
             task = generate_video_task.delay(video.id)
@@ -212,8 +215,8 @@ def _run_replicate_generation(video_id: int, image_data: bytes, audio_data: byte
         local_db.close()
 
 
-def _run_runpod_generation(video_id: int, image_data: bytes, audio_data: bytes):
-    """Background task: Generate video using RunPod GPU worker"""
+def _run_runpod_generation(video_id: int, image_data: bytes):
+    """Background task: Generate video using RunPod GPU worker (HunyuanVideo-1.5)"""
     from ..db.database import SessionLocal
     local_db = SessionLocal()
 
@@ -225,13 +228,14 @@ def _run_runpod_generation(video_id: int, image_data: bytes, audio_data: bytes):
         print(f"[VIDEO] Starting RunPod generation for video {video_id}")
 
         # Call RunPod
+        s = v.settings or {}
         result = gpu_worker.generate_video(
             reference_image=image_data,
-            audio_data=audio_data,
             prompt=v.prompt,
-            emotion=v.emotion or "neutral",
-            guidance_scale=v.settings.get("guidance_scale", 7.5) if v.settings else 7.5,
-            num_inference_steps=v.settings.get("sample_steps", 40) if v.settings else 40,
+            num_inference_steps=s.get("num_inference_steps", 50),
+            num_frames=s.get("num_frames", 129),
+            resolution=s.get("resolution", "720p"),
+            aspect_ratio=s.get("aspect_ratio", "16:9"),
         )
 
         # Save the generated video

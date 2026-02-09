@@ -1,7 +1,7 @@
 from celery import Task
 from .celery_app import celery_app
 # Lazy import to avoid PyTorch loading issues on backend startup
-# from .omniavatar_wrapper import get_generator
+# from .hunyuan_video_service import get_service
 import logging
 from pathlib import Path
 import os
@@ -9,10 +9,10 @@ from datetime import datetime
 import uuid
 import traceback
 
-def get_generator():
-    """Lazy import of generator to avoid PyTorch loading on backend startup"""
-    from .omniavatar_wrapper import get_generator as _get_generator
-    return _get_generator()
+def get_service():
+    """Lazy import of HunyuanVideo service to avoid PyTorch loading on backend startup"""
+    from .hunyuan_video_service import get_service as _get_service
+    return _get_service()
 
 # Database imports
 from sqlalchemy import create_engine
@@ -54,7 +54,7 @@ class VideoGenerationTask(Task):
 @celery_app.task(bind=True, base=VideoGenerationTask, name="worker.tasks.generate_video_task")
 def generate_video_task(self, video_id: int):
     """
-    Celery task to generate avatar video using OmniAvatar
+    Celery task to generate avatar video using HunyuanVideo-1.5
 
     Args:
         video_id: Database ID of video to generate
@@ -101,21 +101,20 @@ def generate_video_task(self, video_id: int):
         enhanced_prompt = f"{video.prompt}. {video.emotion} emotion. {video.style} style."
 
         # Generate video
-        generator = get_generator()
+        service = get_service()
 
         settings = video.settings or {}
-        sample_steps = settings.get('sample_steps', 40)
-        guidance_scale = settings.get('guidance_scale', 7.5)
+        num_inference_steps = settings.get('num_inference_steps', 50)
+        num_frames = settings.get('num_frames', 129)
 
-        metadata = generator.generate(
+        metadata = service.generate(
             reference_image_path=str(reference_image_path),
-            audio_path=str(audio_path),
             prompt=enhanced_prompt,
             output_path=str(output_path),
-            sample_steps=sample_steps,
-            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            num_frames=num_frames,
             seed=settings.get('seed'),
-            resolution="480p"  # TODO: Support 720p for premium tier
+            resolution=settings.get('resolution', '720p'),
         )
 
         logger.info(f"Generated video for {video_id}")

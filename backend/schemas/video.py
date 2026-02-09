@@ -18,8 +18,9 @@ class VideoGenerationRequest(BaseModel):
 
     # Advanced settings
     tier: VideoTier = VideoTier.STANDARD
-    sample_steps: Optional[int] = Field(40, ge=10, le=100)
-    guidance_scale: Optional[float] = Field(7.5, ge=1.0, le=20.0)
+    num_inference_steps: Optional[int] = Field(50, ge=10, le=100)
+    num_frames: Optional[int] = Field(129, ge=1, le=257)
+    resolution: Optional[str] = Field("720p", description="Video resolution: 540p or 720p")
     seed: Optional[int] = Field(None, description="Seed for reproducibility")
 
     @validator('text_input', 'audio_file')

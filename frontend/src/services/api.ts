@@ -1,5 +1,5 @@
 ﻿/**
- * API service for video generation - Connected to OmniAvatar backend
+ * API service for video generation - Connected to HunyuanVideo-1.5 backend
  */
 
 import { VideoProjectState } from '@/types/project';
@@ -129,7 +129,7 @@ class ApiService {
       queued: 'Your video is in the queue...',
       processing_script: 'Processing your script...',
       generating_speech: 'Generating speech audio...',
-      rendering_video: 'Rendering video with OmniAvatar...',
+      rendering_video: 'Rendering video with HunyuanVideo...',
       finalizing: 'Finalizing your video...',
       done: 'Video generation complete!',
     };

@@ -218,7 +218,7 @@ export default function Home() {
             UGC Avatar Platform
           </h1>
           <p className="text-gray-600">
-            Create AI-powered talking head videos with OmniAvatar
+            Create AI-powered talking head videos with HunyuanVideo
           </p>
 
           {/* Backend Status Indicator */}

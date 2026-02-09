@@ -48,7 +48,7 @@ class Video(Base):
     processing_time_seconds = Column(Float, nullable=True)
 
     # Advanced settings
-    settings = Column(JSON, nullable=True)  # sample_steps, guidance_scale, etc.
+    settings = Column(JSON, nullable=True)  # num_inference_steps, num_frames, resolution, etc.
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())

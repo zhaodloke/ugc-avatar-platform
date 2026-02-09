@@ -6,7 +6,7 @@ Vast.ai is a GPU cloud marketplace with competitive pricing:
 - A100 80GB: ~$1.50-2.00/hr (community)
 - Datacenter options available for higher reliability
 
-This service creates on-demand instances for OmniAvatar video generation.
+This service creates on-demand instances for HunyuanVideo-1.5 video generation.
 """
 
 import requests
@@ -24,7 +24,7 @@ VASTAI_API_URL = "https://console.vast.ai/api/v0"
 
 
 class VastAIWorkerService:
-    """Service for running OmniAvatar on Vast.ai GPU instances"""
+    """Service for running HunyuanVideo-1.5 on Vast.ai GPU instances"""
 
     def __init__(self):
         self.api_key = getattr(settings, 'VASTAI_API_KEY', None)
@@ -259,7 +259,7 @@ class VastAIWorkerService:
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install diffusers transformers accelerate flask
 # Download models (cached if using persistent storage)
-python -c "from huggingface_hub import snapshot_download; snapshot_download('OmniAvatar/OmniAvatar-14B', local_dir='/models/OmniAvatar-14B')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('tencent/HunyuanVideo', local_dir='/models/hunyuan-video-1.5')"
 # Start simple HTTP server for receiving jobs
 python /workspace/server.py &
 """
@@ -329,7 +329,7 @@ python /workspace/server.py &
                 "Vast.ai SSH-based generation requires additional setup. "
                 "For immediate use, configure RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID "
                 "for serverless video generation, or use REPLICATE_API_TOKEN for "
-                "pre-hosted models (SadTalker/Wav2Lip, not OmniAvatar)."
+                "pre-hosted models."
             )
 
         except Exception as e:

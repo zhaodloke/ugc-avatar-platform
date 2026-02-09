@@ -2,7 +2,7 @@
 GPU Worker Service - Calls RunPod serverless endpoint for video generation
 
 This service handles communication with the remote GPU worker that runs
-the OmniAvatar model for generating talking head videos.
+HunyuanVideo-1.5 for generating talking head videos (T2V and I2V).
 """
 
 import requests
@@ -38,22 +38,24 @@ class GPUWorkerService:
     def generate_video(
         self,
         reference_image: bytes,
-        audio_data: bytes,
         prompt: str,
-        emotion: str = "neutral",
-        guidance_scale: float = 7.5,
-        num_inference_steps: int = 40,
+        num_inference_steps: int = 50,
+        num_frames: int = 129,
+        resolution: str = "720p",
+        aspect_ratio: str = "16:9",
+        seed: int = 42,
     ) -> Dict[str, Any]:
         """
-        Generate a talking head video using the remote GPU worker.
+        Generate a video using HunyuanVideo-1.5 on RunPod.
 
         Args:
-            reference_image: Image bytes
-            audio_data: Audio bytes
+            reference_image: Image bytes (for I2V mode; omit for T2V)
             prompt: Scene description
-            emotion: Emotion for the avatar
-            guidance_scale: CFG scale
-            num_inference_steps: Denoising steps
+            num_inference_steps: Denoising steps (default 50)
+            num_frames: Number of frames (default 129, ~5.4s at 24fps)
+            resolution: Video resolution (540p or 720p)
+            aspect_ratio: Aspect ratio (16:9, 9:16, etc.)
+            seed: Random seed for reproducibility
 
         Returns:
             Dict with video bytes and metadata
@@ -61,20 +63,20 @@ class GPUWorkerService:
         if not self.is_configured:
             raise ValueError("RunPod not configured. Set RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID")
 
-        # Encode inputs as base64
+        # Encode reference image as base64
         image_b64 = base64.b64encode(reference_image).decode('utf-8')
-        audio_b64 = base64.b64encode(audio_data).decode('utf-8')
 
-        # Prepare request payload
+        # Prepare request payload (matches handler.py expected format)
         payload = {
             "input": {
                 "reference_image": image_b64,
-                "audio": audio_b64,
                 "prompt": prompt,
-                "emotion": emotion,
                 "settings": {
-                    "guidance_scale": guidance_scale,
-                    "num_inference_steps": num_inference_steps
+                    "num_inference_steps": num_inference_steps,
+                    "num_frames": num_frames,
+                    "resolution": resolution,
+                    "aspect_ratio": aspect_ratio,
+                    "seed": seed,
                 }
             }
         }
